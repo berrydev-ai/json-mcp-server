@@ -1,0 +1,48 @@
+{
+  "name": "@berrydev-ai/json-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server providing JSON querying, schema generation, and validation tools",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "json-mcp-server": "index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js --verbose=true",
+    "test": "node test.js",
+    "inspect:local": "npx @modelcontextprotocol/inspector --config config.json --server json-mcp-server-local",
+    "inspect:published": "npx @modelcontextprotocol/inspector --config config.json --server json-mcp-server",
+    "release:patch": "npm version patch",
+    "release:minor": "npm version minor",
+    "release:major": "npm version major"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.658.1",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ajv": "^8.17.1",
+    "commander": "^12.1.0",
+    "genson-js": "^0.0.8",
+    "node-jq": "^6.0.1",
+    "which": "^4.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "json",
+    "jq",
+    "schema",
+    "validation",
+    "model-context-protocol"
+  ],
+  "author": "Eric Berry (eric@berrydev.ai)",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/berrydev-ai/json-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/berrydev-ai/json-mcp-server/issues"
+  },
+  "homepage": "https://github.com/berrydev-ai/json-mcp-server#readme",
+  "packageManager": "pnpm@10.13.1"
+}
