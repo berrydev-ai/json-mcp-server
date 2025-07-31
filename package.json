@@ -10,9 +10,12 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node index.js --verbose=true",
+    "start:http": "node index.js --transport=http --verbose=true",
+    "dev:http": "node index.js --transport=http --verbose=true --port=3000",
     "test": "node test.js",
     "inspect:local": "npx @modelcontextprotocol/inspector --config config.json --server json-mcp-server-local",
     "inspect:published": "npx @modelcontextprotocol/inspector --config config.json --server json-mcp-server",
+    "inspect:http": "npx @modelcontextprotocol/inspector --config config.json --server json-mcp-server-http",
     "release:patch": "npm version patch",
     "release:minor": "npm version minor",
     "release:major": "npm version major"
@@ -22,6 +25,8 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "ajv": "^8.17.1",
     "commander": "^12.1.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
     "genson-js": "^0.0.8",
     "node-jq": "^6.0.1",
     "which": "^4.0.0"

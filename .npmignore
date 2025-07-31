@@ -84,3 +84,6 @@ pids/
 *.pid
 *.seed
 *.pid.lock
+
+# MCP DXT Manifest
+manifest.json
