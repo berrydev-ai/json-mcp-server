@@ -1,10 +1,23 @@
 #!/usr/bin/env node
 
+/**
+ * JSON MCP Server - A Model Context Protocol server for JSON operations
+ *
+ * This server provides tools for querying JSON files using jq notation,
+ * generating JSON schemas, and validating JSON schemas. It also supports
+ * syncing JSON files from S3 buckets.
+ *
+ * @author JSON MCP Server
+ * @version 1.0.0
+ */
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  isInitializeRequest,
 } from '@modelcontextprotocol/sdk/types.js';
 import jq from 'node-jq';
 import { createSchema } from 'genson-js';
@@ -20,8 +33,24 @@ import {
 } from "@aws-sdk/client-s3"
 import { createWriteStream } from "fs"
 import { Readable } from "stream"
+import express from "express"
+import cors from "cors"
+import { randomUUID } from "crypto"
 
-// Parse command line arguments
+/**
+ * Parse command line arguments using commander
+ *
+ * Supported options:
+ * - --verbose: Enable verbose logging
+ * - --file-path: Default file path for JSON operations
+ * - --jq-path: Path to local jq binary (auto-detected if not provided)
+ * - --s3-uri: S3 URI to sync from (e.g., s3://bucket/key)
+ * - --aws-region: AWS region for S3 operations
+ * - --transport: Transport type (stdio or http)
+ * - --port: Port for HTTP transport (default: 3000)
+ * - --host: Host for HTTP transport (default: localhost)
+ * - --cors-origin: CORS allowed origins for HTTP transport
+ */
 program
   .option("--verbose <value>", "Enable verbose logging", "false")
   .option("--file-path <path>", "Default file path for JSON operations")
@@ -31,28 +60,50 @@ program
   )
   .option("--s3-uri <uri>", "S3 URI to sync from (e.g., s3://bucket/key)")
   .option("--aws-region <region>", "AWS region for S3 operations", "us-east-1")
+  .option("--transport <type>", "Transport type: stdio or http", "stdio")
+  .option("--port <number>", "Port for HTTP transport", "3000")
+  .option("--host <string>", "Host for HTTP transport", "localhost")
+  .option("--cors-origin <origins>", "CORS allowed origins (comma-separated)", "*")
   .parse()
 
+/** Extract and define configuration constants from command line options and environment variables */
 const options = program.opts()
 const VERBOSE = options.verbose === "true"
 const DEFAULT_FILE_PATH = options.filePath
 const CUSTOM_JQ_PATH = options.jqPath
 const S3_URI = options.s3Uri
 const AWS_REGION = options.awsRegion
+const TRANSPORT_TYPE = options.transport
+const HTTP_PORT = parseInt(options.port)
+const HTTP_HOST = options.host
+const CORS_ORIGINS = options.corsOrigin === "*" ? "*" : options.corsOrigin.split(",")
 const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID
 const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY
 
-// Global jq configuration
+/** Global jq configuration object */
 let JQ_CONFIG = {}
 
-// Logging utility
+/**
+ * Logging utility function that outputs to stderr when verbose mode is enabled
+ *
+ * @param {...any} args - Arguments to log
+ */
 function log(...args) {
   if (VERBOSE) {
     console.error("[JSON-MCP-SERVER]", ...args)
   }
 }
 
-// Initialize jq with local binary
+/**
+ * Initialize jq with local binary
+ *
+ * Detects and configures the jq binary path, either from a custom path
+ * or by auto-detecting the system installation. Provides helpful error
+ * messages with installation instructions if jq is not found.
+ *
+ * @returns {Promise<boolean>} - True if initialization successful
+ * @throws {Error} - If jq binary cannot be found or accessed
+ */
 async function initializeJq() {
   try {
     let jqPath
@@ -127,7 +178,13 @@ async function initializeJq() {
   }
 }
 
-// Load JSON file utility function
+/**
+ * Load and parse a JSON file from the filesystem
+ *
+ * @param {string} filePath - Absolute path to the JSON file
+ * @returns {Promise<any>} - Parsed JSON data
+ * @throws {Error} - If file not found or contains invalid JSON
+ */
 async function loadJsonFile(filePath) {
   try {
     const fileContent = await fs.readFile(filePath, "utf8")
@@ -142,7 +199,13 @@ async function loadJsonFile(filePath) {
   }
 }
 
-// Validate file path and existence async
+/**
+ * Validate that a file path is absolute and points to an existing file
+ *
+ * @param {string} filePath - Path to validate
+ * @returns {Promise<string>} - The validated file path
+ * @throws {Error} - If path is invalid, not absolute, or file doesn't exist
+ */
 async function validateFilePath(filePath) {
   if (!filePath) {
     throw new Error("File path is required")
@@ -168,7 +231,13 @@ async function validateFilePath(filePath) {
   return filePath
 }
 
-// S3 Sync functionality
+/**
+ * Parse an S3 URI into bucket and key components
+ *
+ * @param {string} s3Uri - S3 URI in format s3://bucket/key
+ * @returns {{bucket: string, key: string}} - Parsed bucket and key
+ * @throws {Error} - If URI format is invalid
+ */
 function parseS3Uri(s3Uri) {
   if (!s3Uri.startsWith("s3://")) {
     throw new Error(`Invalid S3 URI format: ${s3Uri}. Must start with 's3://'`)
@@ -195,6 +264,15 @@ function parseS3Uri(s3Uri) {
   return { bucket, key }
 }
 
+/**
+ * Get file information from S3 (metadata, existence, last modified, etc.)
+ *
+ * @param {S3Client} s3Client - Configured S3 client
+ * @param {string} bucket - S3 bucket name
+ * @param {string} key - S3 object key
+ * @returns {Promise<{exists: boolean, lastModified?: Date, etag?: string, size?: number}>} - File info
+ * @throws {Error} - If S3 operation fails (excluding NotFound)
+ */
 async function getS3FileInfo(s3Client, bucket, key) {
   try {
     log(`s3FileConfig bucket: ${bucket}`)
@@ -241,6 +319,12 @@ async function getS3FileInfo(s3Client, bucket, key) {
   }
 }
 
+/**
+ * Get file information from local filesystem
+ *
+ * @param {string} filePath - Path to local file
+ * @returns {Promise<{exists: boolean, lastModified?: Date, size?: number}>} - File info
+ */
 async function getLocalFileInfo(filePath) {
   try {
     const stats = await fs.stat(filePath)
@@ -257,6 +341,13 @@ async function getLocalFileInfo(filePath) {
   }
 }
 
+/**
+ * Compare S3 and local file information to determine if S3 file is newer
+ *
+ * @param {object} s3Info - S3 file information
+ * @param {object} localInfo - Local file information
+ * @returns {boolean} - True if S3 file is newer or local doesn't exist
+ */
 function isS3FileNewer(s3Info, localInfo) {
   if (!localInfo.exists) {
     return true // Local file doesn't exist, so S3 is "newer"
@@ -269,6 +360,16 @@ function isS3FileNewer(s3Info, localInfo) {
   return s3Info.lastModified > localInfo.lastModified
 }
 
+/**
+ * Download a file from S3 to local filesystem with progress tracking
+ *
+ * @param {S3Client} s3Client - Configured S3 client
+ * @param {string} bucket - S3 bucket name
+ * @param {string} key - S3 object key
+ * @param {string} localPath - Local file path to save to
+ * @returns {Promise<void>}
+ * @throws {Error} - If download fails
+ */
 async function downloadFromS3(s3Client, bucket, key, localPath) {
   try {
     // Ensure local directory exists
@@ -314,6 +415,14 @@ async function downloadFromS3(s3Client, bucket, key, localPath) {
   }
 }
 
+/**
+ * Sync a file from S3 to local filesystem if S3 version is newer
+ *
+ * @param {string} s3Uri - S3 URI in format s3://bucket/key
+ * @param {string} localPath - Local file path to sync to
+ * @returns {Promise<boolean>} - True if file was downloaded, false if already up to date
+ * @throws {Error} - If sync operation fails
+ */
 async function syncFromS3(s3Uri, localPath) {
   try {
     const { bucket, key } = parseS3Uri(s3Uri)
@@ -331,9 +440,9 @@ async function syncFromS3(s3Uri, localPath) {
       credentials:
         AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY
           ? {
-              accessKeyId: AWS_ACCESS_KEY_ID,
-              secretAccessKey: AWS_SECRET_ACCESS_KEY,
-            }
+            accessKeyId: AWS_ACCESS_KEY_ID,
+            secretAccessKey: AWS_SECRET_ACCESS_KEY,
+          }
           : undefined, // Let SDK handle credentials (IAM roles, profiles, etc.)
     })
 
@@ -375,10 +484,14 @@ async function syncFromS3(s3Uri, localPath) {
   }
 }
 
-// Create the MCP server
+/**
+ * Create the MCP (Model Context Protocol) server instance
+ *
+ * Configured with tools capability to provide JSON manipulation tools
+ */
 const server = new Server(
   {
-    name: "json-tools-server",
+    name: "json-mcp-server",
     version: "1.0.0",
   },
   {
@@ -388,7 +501,14 @@ const server = new Server(
   }
 )
 
-// List available tools
+/**
+ * Handle ListTools requests
+ *
+ * Returns the list of available tools with their schemas:
+ * - query_json: Query JSON data using jq notation
+ * - generate_json_schema: Generate JSON schema from JSON data
+ * - validate_json_schema: Validate JSON schema structure
+ */
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   log("Listing available tools")
 
@@ -453,7 +573,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   }
 })
 
-// Handle tool calls
+/**
+ * Handle CallTool requests
+ *
+ * Executes the requested tool with provided arguments and returns results.
+ * Supports query_json, generate_json_schema, and validate_json_schema tools.
+ *
+ * @param {object} request - The tool call request
+ * @returns {Promise<object>} - Tool execution result
+ */
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params
 
@@ -560,19 +688,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [
               {
                 type: "text",
-                text: `✅ JSON Schema is valid!\n\nSchema summary:\n- Type: ${
-                  schema.type || "not specified"
-                }\n- Properties: ${
-                  schema.properties
+                text: `✅ JSON Schema is valid!\n\nSchema summary:\n- Type: ${schema.type || "not specified"
+                  }\n- Properties: ${schema.properties
                     ? Object.keys(schema.properties).length
                     : "none"
-                }\n- Required fields: ${
-                  schema.required ? schema.required.length : 0
-                }\n\nFull validated schema:\n${JSON.stringify(
-                  schema,
-                  null,
-                  2
-                )}`,
+                  }\n- Required fields: ${schema.required ? schema.required.length : 0
+                  }\n\nFull validated schema:\n${JSON.stringify(
+                    schema,
+                    null,
+                    2
+                  )}`,
               },
             ],
           }
@@ -583,9 +708,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [
               {
                 type: "text",
-                text: `❌ JSON Schema is invalid!\n\nError: ${
-                  validationError.message
-                }\n\nProvided schema:\n${JSON.stringify(schema, null, 2)}`,
+                text: `❌ JSON Schema is invalid!\n\nError: ${validationError.message
+                  }\n\nProvided schema:\n${JSON.stringify(schema, null, 2)}`,
               },
             ],
           }
@@ -610,17 +734,167 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 })
 
+/**
+ * Obfuscate sensitive strings for logging (shows first 3 and last 3 characters)
+ *
+ * @param {string} str - String to obfuscate
+ * @returns {string} - Obfuscated string or "not set" if empty
+ */
 const obfuscate = (str) => {
   if (!str) return "not set"
-  if (str.length <= 6) return str // Nothing to abbreviate
+  if (str.length <= 6) return str
   return str.slice(0, 3) + "..." + str.slice(-3)
 }
 
-// Start the server
+/**
+ * Setup and start HTTP server with streamable HTTP transport
+ *
+ * @param {Server} mcpServer - The MCP server instance
+ * @returns {Promise<void>}
+ */
+async function startHttpServer(mcpServer) {
+  const app = express()
+
+  // Configure CORS
+  app.use(cors({
+    origin: CORS_ORIGINS,
+    exposedHeaders: ['Mcp-Session-Id'],
+    allowedHeaders: ['Content-Type', 'mcp-session-id'],
+  }))
+
+  app.use(express.json())
+
+  // Map to store transports by session ID
+  const transports = {}
+
+  // Handle POST requests for client-to-server communication
+  app.post('/mcp', async (req, res) => {
+    try {
+      // Check for existing session ID
+      const sessionId = req.headers['mcp-session-id']
+      let transport
+
+      if (sessionId && transports[sessionId]) {
+        // Reuse existing transport
+        transport = transports[sessionId]
+      } else if (!sessionId && isInitializeRequest(req.body)) {
+        // New initialization request
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sessionId) => {
+            // Store the transport by session ID
+            transports[sessionId] = transport
+          },
+          // Enable DNS rebinding protection for local servers
+          enableDnsRebindingProtection: true,
+          allowedHosts: [HTTP_HOST, '127.0.0.1', 'localhost', `${HTTP_HOST}:${HTTP_PORT}`, `127.0.0.1:${HTTP_PORT}`, `localhost:${HTTP_PORT}`],
+        })
+
+        // Clean up transport when closed
+        transport.onclose = () => {
+          if (transport.sessionId) {
+            delete transports[transport.sessionId]
+            log(`Session ${transport.sessionId} cleaned up`)
+          }
+        }
+
+        // Connect to the MCP server
+        await mcpServer.connect(transport)
+      } else {
+        // Invalid request
+        res.status(400).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Bad Request: No valid session ID provided',
+          },
+          id: null,
+        })
+        return
+      }
+
+      // Handle the request
+      await transport.handleRequest(req, res, req.body)
+    } catch (error) {
+      log('Error handling MCP request:', error)
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32603,
+            message: 'Internal server error',
+          },
+          id: null,
+        })
+      }
+    }
+  })
+
+  // Reusable handler for GET and DELETE requests
+  const handleSessionRequest = async (req, res) => {
+    const sessionId = req.headers['mcp-session-id']
+    if (!sessionId || !transports[sessionId]) {
+      res.status(400).send('Invalid or missing session ID')
+      return
+    }
+
+    const transport = transports[sessionId]
+    await transport.handleRequest(req, res)
+  }
+
+  // Handle GET requests for server-to-client notifications via SSE
+  app.get('/mcp', handleSessionRequest)
+
+  // Handle DELETE requests for session termination
+  app.delete('/mcp', handleSessionRequest)
+
+  // Start the HTTP server
+  return new Promise((resolve, reject) => {
+    const httpServer = app.listen(HTTP_PORT, HTTP_HOST, (error) => {
+      if (error) {
+        reject(new Error(`Failed to start HTTP server: ${error.message}`))
+      } else {
+        console.error(`✅ JSON MCP Server (HTTP) listening on http://${HTTP_HOST}:${HTTP_PORT}/mcp`)
+        log(`Server started with ${Object.keys(transports).length} active sessions`)
+        resolve()
+      }
+    })
+
+    // Handle server shutdown gracefully
+    process.on('SIGINT', () => {
+      log('Shutting down HTTP server...')
+      // Close all active transports
+      Object.values(transports).forEach(transport => {
+        if (transport && typeof transport.close === 'function') {
+          transport.close()
+        }
+      })
+      httpServer.close(() => {
+        process.exit(0)
+      })
+    })
+  })
+}
+
+/**
+ * Main function to start the JSON MCP Server
+ *
+ * Initializes jq, performs S3 sync if configured, and starts the MCP server
+ * with either stdio or HTTP transport for communication.
+ *
+ * @returns {Promise<void>}
+ */
 async function main() {
   log("Starting JSON MCP Server...")
   log("Verbose mode:", VERBOSE)
+  log("Transport type:", TRANSPORT_TYPE)
   log("Default file path:", DEFAULT_FILE_PATH || "not set")
+
+  if (TRANSPORT_TYPE === "http") {
+    log("HTTP Host:", HTTP_HOST)
+    log("HTTP Port:", HTTP_PORT)
+    log("CORS Origins:", Array.isArray(CORS_ORIGINS) ? CORS_ORIGINS.join(", ") : CORS_ORIGINS)
+  }
 
   // Initialize jq with local binary
   await initializeJq()
@@ -654,9 +928,18 @@ async function main() {
     )
   }
 
-  const transport = new StdioServerTransport()
-  await server.connect(transport)
-  log("Server connected and ready")
+  // Start server with appropriate transport
+  if (TRANSPORT_TYPE === "http") {
+    log(`Starting HTTP transport on ${HTTP_HOST}:${HTTP_PORT}`)
+    await startHttpServer(server)
+  } else if (TRANSPORT_TYPE === "stdio") {
+    log("Starting stdio transport")
+    const transport = new StdioServerTransport()
+    await server.connect(transport)
+    log("Server connected and ready")
+  } else {
+    throw new Error(`Unknown transport type: ${TRANSPORT_TYPE}. Use "stdio" or "http"`)
+  }
 }
 
 main().catch((error) => {
