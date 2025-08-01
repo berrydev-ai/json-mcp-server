@@ -11,7 +11,7 @@ test-schema.json
 
 # Development and config files
 claude_desktop_config.json
-CLAUDE.md
+CLAUDE.local.md
 
 # ENV files
 .env

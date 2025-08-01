@@ -68,15 +68,21 @@ program
 
 /** Extract and define configuration constants from command line options and environment variables */
 const options = program.opts()
-const VERBOSE = options.verbose === "true"
-const DEFAULT_FILE_PATH = options.filePath
-const CUSTOM_JQ_PATH = options.jqPath
-const S3_URI = options.s3Uri
-const AWS_REGION = options.awsRegion
-const TRANSPORT_TYPE = options.transport
-const HTTP_PORT = parseInt(options.port)
-const HTTP_HOST = options.host
-const CORS_ORIGINS = options.corsOrigin === "*" ? "*" : options.corsOrigin.split(",")
+
+// Environment variables take precedence over CLI arguments
+const VERBOSE = (process.env.VERBOSE || options.verbose) === "true"
+const DEFAULT_FILE_PATH = process.env.FILE_PATH || options.filePath
+const CUSTOM_JQ_PATH = process.env.JQ_PATH || options.jqPath
+const S3_URI = process.env.S3_URI || options.s3Uri
+const AWS_REGION = process.env.AWS_REGION || options.awsRegion
+const TRANSPORT_TYPE = process.env.TRANSPORT || options.transport
+const HTTP_PORT = parseInt(process.env.PORT || options.port)
+const HTTP_HOST = process.env.HOST || options.host
+const CORS_ORIGINS_RAW = process.env.CORS_ORIGIN || options.corsOrigin
+const CORS_ORIGINS = CORS_ORIGINS_RAW === "*" ? "*" : CORS_ORIGINS_RAW.split(",")
+const LOG_FILE = process.env.LOG_FILE
+const MCP_VERSION = process.env.MCP_VERSION
+const AUTH_TOKEN = process.env.AUTH_TOKEN
 const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID
 const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY
 
@@ -84,13 +90,51 @@ const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY
 let JQ_CONFIG = {}
 
 /**
- * Logging utility function that outputs to stderr when verbose mode is enabled
+ * Logging utility function that outputs to stderr or log file when verbose mode is enabled
  *
+ * @param {object|string} options - Logging options with sessionId, or first log argument
  * @param {...any} args - Arguments to log
  */
-function log(...args) {
+function log(options, ...args) {
   if (VERBOSE) {
-    console.error("[JSON-MCP-SERVER]", ...args)
+    let sessionId = null
+    let logArgs = args
+    
+    // Check if first argument is options object with sessionId
+    if (typeof options === 'object' && options !== null && !Array.isArray(options)) {
+      sessionId = options.sessionId
+      // If there are additional args, use them; otherwise options might contain message
+      if (args.length === 0 && options.message) {
+        logArgs = [options.message]
+      }
+    } else {
+      // First argument is part of the log message
+      logArgs = [options, ...args]
+    }
+    
+    const sessionPrefix = sessionId ? `[${sessionId.slice(0, 8)}]` : ''
+    const message = `[JSON-MCP-SERVER]${sessionPrefix} ${logArgs.join(' ')}\n`
+    
+    if (LOG_FILE) {
+      try {
+        fs.appendFileSync(LOG_FILE, message)
+      } catch (error) {
+        console.error(`Failed to write to log file ${LOG_FILE}:`, error.message)
+        // Use appropriate console method based on transport type
+        if (TRANSPORT_TYPE === "http") {
+          console.log(message.trim())
+        } else {
+          console.error(message.trim())
+        }
+      }
+    } else {
+      // Use console.log for HTTP transport, console.error for stdio transport
+      if (TRANSPORT_TYPE === "http") {
+        console.log(message.trim())
+      } else {
+        console.error(message.trim())
+      }
+    }
   }
 }
 
@@ -492,7 +536,7 @@ async function syncFromS3(s3Uri, localPath) {
 const server = new Server(
   {
     name: "json-mcp-server",
-    version: "1.0.0",
+    version: MCP_VERSION || "1.1.0",
   },
   {
     capabilities: {
@@ -764,11 +808,53 @@ async function startHttpServer(mcpServer) {
 
   app.use(express.json())
 
+  // Health check endpoint for Docker
+  app.get('/health', (req, res) => {
+    res.status(200).json({ 
+      status: 'healthy', 
+      service: 'json-mcp-server',
+      version: MCP_VERSION || "1.1.0",
+      transport: 'http'
+    })
+  })
+
   // Map to store transports by session ID
   const transports = {}
 
+  // Authentication middleware for AUTH_TOKEN
+  const authenticate = (req, res, next) => {
+    if (!AUTH_TOKEN) {
+      // No authentication required if AUTH_TOKEN not set
+      return next()
+    }
+
+    const authHeader = req.headers.authorization
+    const tokenParam = req.query.token
+
+    let providedToken = null
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      providedToken = authHeader.slice(7)
+    } else if (tokenParam) {
+      providedToken = tokenParam
+    }
+
+    if (providedToken !== AUTH_TOKEN) {
+      log('Authentication failed - invalid or missing token')
+      return res.status(401).json({
+        jsonrpc: '2.0',
+        error: {
+          code: -32001,
+          message: 'Authentication required. Provide valid Bearer token in Authorization header or token query parameter.',
+        },
+        id: null,
+      })
+    }
+
+    next()
+  }
+
   // Handle POST requests for client-to-server communication
-  app.post('/mcp', async (req, res) => {
+  app.post('/mcp', authenticate, async (req, res) => {
     try {
       // Check for existing session ID
       const sessionId = req.headers['mcp-session-id']
@@ -794,7 +880,7 @@ async function startHttpServer(mcpServer) {
         transport.onclose = () => {
           if (transport.sessionId) {
             delete transports[transport.sessionId]
-            log(`Session ${transport.sessionId} cleaned up`)
+            log({sessionId: transport.sessionId}, `Session cleaned up`)
           }
         }
 
@@ -843,10 +929,10 @@ async function startHttpServer(mcpServer) {
   }
 
   // Handle GET requests for server-to-client notifications via SSE
-  app.get('/mcp', handleSessionRequest)
+  app.get('/mcp', authenticate, handleSessionRequest)
 
   // Handle DELETE requests for session termination
-  app.delete('/mcp', handleSessionRequest)
+  app.delete('/mcp', authenticate, handleSessionRequest)
 
   // Start the HTTP server
   return new Promise((resolve, reject) => {

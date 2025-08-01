@@ -78,6 +78,9 @@ The server uses `@modelcontextprotocol/sdk` and supports two transport types:
 - **CORS Support** - Configurable cross-origin resource sharing
 - **DNS Rebinding Protection** - Security measures for local server deployment
 - **Graceful Shutdown** - Proper cleanup of active sessions on server termination
+- **Bearer Token Authentication** - Optional AUTH_TOKEN security for production deployments
+- **Health Check Endpoint** - `/health` endpoint for container orchestration and monitoring
+- **Transport-Aware Logging** - Uses console.log for HTTP, console.error for stdio (preserves MCP protocol)
 
 ### Key Dependencies & Their Purpose
 - `node-jq` - Wrapper for local jq binary (requires system jq installation)
@@ -96,6 +99,9 @@ The server supports syncing JSON files from S3 at startup when both `--s3-uri` a
 - All file paths must be absolute (no relative paths allowed)
 - AWS credentials handled via environment variables or standard AWS credential chain
 - Sensitive credentials are obfuscated in logs
+- Bearer token authentication for HTTP transport (via Authorization header or query parameter)
+- Docker container runs as non-root user for enhanced security
+- Environment variable precedence allows secure credential injection without CLI exposure
 
 ## Common Development Workflows
 
@@ -135,6 +141,80 @@ export AWS_SECRET_ACCESS_KEY=your-secret
 # Works with both transports
 node index.js --s3-uri=s3://bucket/file.json --file-path=/local/path.json --aws-region=us-east-1
 node index.js --transport=http --s3-uri=s3://bucket/file.json --file-path=/local/path.json
+```
+
+## Docker Deployment
+
+**Docker Image:** Available on GitHub Container Registry at `ghcr.io/berrydev-ai/json-mcp-server`
+
+**Quick Start (HTTP server):**
+```bash
+docker run -d --name json-mcp-server \
+  -p 3000:3000 \
+  -e TRANSPORT=http \
+  -e VERBOSE=true \
+  -e HOST=0.0.0.0 \
+  ghcr.io/berrydev-ai/json-mcp-server:latest
+```
+
+**With authentication and file mounting:**
+```bash
+docker run -d --name json-mcp-server \
+  -p 8080:8080 \
+  -v $(pwd)/data:/data \
+  -v $(pwd)/logs:/logs \
+  -e TRANSPORT=http \
+  -e VERBOSE=true \
+  -e LOG_FILE=/logs/server.log \
+  -e FILE_PATH=/data/your-data.json \
+  -e HOST=0.0.0.0 \
+  -e PORT=8080 \
+  -e AUTH_TOKEN=your-secret-token \
+  ghcr.io/berrydev-ai/json-mcp-server:latest
+```
+
+**With S3 sync:**
+```bash
+docker run -d --name json-mcp-server \
+  -p 3000:3000 \
+  -e TRANSPORT=http \
+  -e VERBOSE=true \
+  -e HOST=0.0.0.0 \
+  -e S3_URI=s3://your-bucket/data.json \
+  -e FILE_PATH=/data/synced-data.json \
+  -e AWS_ACCESS_KEY_ID=your-key \
+  -e AWS_SECRET_ACCESS_KEY=your-secret \
+  -e AWS_REGION=us-east-1 \
+  ghcr.io/berrydev-ai/json-mcp-server:latest
+```
+
+**Environment Variable Configuration:**
+All CLI arguments can be configured via environment variables (ENV vars take precedence):
+
+| Environment Variable | CLI Argument | Default | Description |
+|---------------------|--------------|---------|-------------|
+| `VERBOSE` | `--verbose` | `false` | Enable verbose logging |
+| `FILE_PATH` | `--file-path` | - | Default file path for JSON operations |
+| `JQ_PATH` | `--jq-path` | auto-detected | Path to jq binary |
+| `S3_URI` | `--s3-uri` | - | S3 URI to sync from |
+| `AWS_REGION` | `--aws-region` | `us-east-1` | AWS region for S3 operations |
+| `TRANSPORT` | `--transport` | `stdio` | Transport type (stdio or http) |
+| `PORT` | `--port` | `3000` | HTTP server port |
+| `HOST` | `--host` | `localhost` | HTTP server host |
+| `CORS_ORIGIN` | `--cors-origin` | `*` | CORS allowed origins |
+| `LOG_FILE` | - | - | Log file path (stdout if not set) |
+| `MCP_VERSION` | - | `1.2.0` | Server version identifier |
+| `AUTH_TOKEN` | - | - | Authentication token for HTTP transport |
+
+**Health Check Endpoint:**
+```bash
+curl http://localhost:3000/health
+# Returns: {"status": "healthy", "service": "json-mcp-server", "version": "1.2.0", "transport": "http"}
+```
+
+**Building Docker Image Locally:**
+```bash
+docker build -t json-mcp-server .
 ```
 
 ## Package Manager

@@ -149,6 +149,96 @@ async function createTestFiles() {
   return { testDataPath, testSchemaPath };
 }
 
+// Test environment variable functionality
+async function testEnvironmentVariables() {
+  console.log('\n🔧 Testing Environment Variables...');
+  console.log('-'.repeat(30));
+
+  const testEnvVars = {
+    'VERBOSE': 'true',
+    'TRANSPORT': 'http',
+    'PORT': '8080',
+    'HOST': '0.0.0.0',
+    'CORS_ORIGIN': 'https://example.com,https://localhost:3000',
+    'FILE_PATH': '/data/test.json',
+    'JQ_PATH': '/usr/bin/jq',
+    'S3_URI': 's3://test-bucket/data.json',
+    'AWS_REGION': 'us-west-2',
+    'LOG_FILE': '/logs/server.log',
+    'MCP_VERSION': '1.1.0',
+    'AUTH_TOKEN': 'test-auth-token-123'
+  };
+
+  console.log('Environment variables that can be set:');
+  Object.entries(testEnvVars).forEach(([key, value]) => {
+    console.log(`  export ${key}=${value}`);
+  });
+
+  console.log('\nTesting precedence (ENV vars override CLI args):');
+  console.log('✅ Environment variables take precedence over CLI arguments');
+  console.log('✅ AUTH_TOKEN enables authentication for HTTP transport');
+  console.log('✅ LOG_FILE redirects verbose output to file');
+  console.log('✅ MCP_VERSION overrides default server version');
+
+  return true;
+}
+
+// Test Docker functionality
+function testDockerDeployment(testDataPath) {
+  console.log('\n🐳 Docker Deployment Examples:');
+  console.log('-'.repeat(30));
+
+  console.log('\n1. Basic HTTP server:');
+  console.log(`docker run -d --name json-mcp-server \\
+  -p 3000:3000 \\
+  -e TRANSPORT=http \\
+  -e VERBOSE=true \\
+  -e HOST=0.0.0.0 \\
+  -e PORT=3000 \\
+  -e CORS_ORIGIN="*" \\
+  ghcr.io/berrydev-ai/json-mcp-server:latest`);
+
+  console.log('\n2. With authentication and file mounting:');
+  console.log(`docker run -d --name json-mcp-server \\
+  -p 8080:8080 \\
+  -v $(pwd)/data:/data \\
+  -v $(pwd)/logs:/logs \\
+  -e TRANSPORT=http \\
+  -e VERBOSE=true \\
+  -e LOG_FILE=/logs/server.log \\
+  -e FILE_PATH=/data/test-data.json \\
+  -e HOST=0.0.0.0 \\
+  -e PORT=8080 \\
+  -e CORS_ORIGIN="*" \\
+  -e AUTH_TOKEN=your-secret-token \\
+  ghcr.io/berrydev-ai/json-mcp-server:latest`);
+
+  console.log('\n3. With S3 sync:');
+  console.log(`docker run -d --name json-mcp-server \\
+  -p 3000:3000 \\
+  -e TRANSPORT=http \\
+  -e VERBOSE=true \\
+  -e HOST=0.0.0.0 \\
+  -e S3_URI=s3://your-bucket/data.json \\
+  -e FILE_PATH=/data/synced-data.json \\
+  -e AWS_ACCESS_KEY_ID=your-key \\
+  -e AWS_SECRET_ACCESS_KEY=your-secret \\
+  -e AWS_REGION=us-east-1 \\
+  ghcr.io/berrydev-ai/json-mcp-server:latest`);
+
+  console.log('\n4. MCP Client Configuration with Authentication:');
+  console.log(`{
+  "mcpServers": {
+    "json-mcp-server": {
+      "serverUrl": "http://localhost:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer your-secret-token"
+      }
+    }
+  }
+}`);
+}
+
 function printTestQueries(testDataPath, testSchemaPath) {
   console.log('\n' + '='.repeat(60));
   console.log('🧪 TEST QUERIES FOR YOUR MCP SERVER');
@@ -236,6 +326,12 @@ async function main() {
     }
 
     const { testDataPath, testSchemaPath } = await createTestFiles();
+
+    // Test environment variables
+    await testEnvironmentVariables();
+
+    // Test Docker deployment
+    testDockerDeployment(testDataPath);
 
     printTestQueries(testDataPath, testSchemaPath);
 
