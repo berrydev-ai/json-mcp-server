@@ -1,0 +1,39 @@
+# Basic HTTP Transport Server
+# Simple Docker Compose setup for running the JSON MCP Server with HTTP transport
+#
+# Usage:
+#   docker-compose -f examples/docker-compose.basic.yml up -d
+#
+# Access:
+#   Health check: curl http://localhost:3000/health
+#   MCP endpoint: http://localhost:3000/mcp
+
+version: '3.8'
+
+services:
+  json-mcp-server:
+    image: ghcr.io/berrydev-ai/json-mcp-server:latest
+    container_name: json-mcp-server-basic
+    ports:
+      - "3000:3000"
+    environment:
+      # Transport Configuration
+      - TRANSPORT=http
+      - VERBOSE=true
+      - HOST=0.0.0.0
+      - PORT=3000
+      - CORS_ORIGIN=*
+      
+      # Optional: Use test data from container
+      - FILE_PATH=/app/test-data.json
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Restart policy
+    restart: unless-stopped

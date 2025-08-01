@@ -1,0 +1,85 @@
+# S3-Enabled HTTP Transport Server
+# Docker Compose setup with S3 synchronization for remote JSON data
+#
+# Usage:
+#   1. Set AWS credentials in .env file
+#   2. Configure S3_URI in .env file
+#   3. docker-compose -f examples/docker-compose.s3.yml up -d
+#
+# Features:
+#   - Syncs JSON data from S3 at startup
+#   - Smart sync: only downloads if S3 version is newer
+#   - Persistent local caching in mounted volume
+
+version: '3.8'
+
+services:
+  json-mcp-server:
+    image: ghcr.io/berrydev-ai/json-mcp-server:latest
+    container_name: json-mcp-server-s3
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount data directory for S3 sync cache
+      - ./data:/data
+      # Mount logs directory for debugging S3 operations
+      - ./logs:/logs
+    environment:
+      # Transport Configuration
+      - TRANSPORT=http
+      - VERBOSE=true
+      - HOST=0.0.0.0
+      - PORT=3000
+      - CORS_ORIGIN=*
+      
+      # S3 Configuration
+      - S3_URI=${S3_URI}
+      - FILE_PATH=/data/synced-data.json
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      
+      # AWS Credentials
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      
+      # Logging
+      - LOG_FILE=/logs/server.log
+    
+    # Create directories if they don't exist
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ./logs
+        target: /logs
+        bind:
+          create_host_path: true
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s  # Longer start period for S3 sync
+    
+    restart: unless-stopped
+
+# Example environment file content:
+# Create a .env file in the same directory with:
+#
+# # S3 Configuration
+# S3_URI=s3://your-bucket/data.json
+# AWS_REGION=us-east-1
+# 
+# # AWS Credentials
+# AWS_ACCESS_KEY_ID=your-aws-access-key-id
+# AWS_SECRET_ACCESS_KEY=your-aws-secret-access-key
+#
+# Alternative AWS authentication methods:
+# - Use IAM roles (remove AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY)
+# - Use AWS profiles mounted via volume:
+#   volumes:
+#     - ~/.aws:/root/.aws:ro

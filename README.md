@@ -328,7 +328,7 @@ Returns:
 ```json
 {
   "status": "healthy",
-  "service": "json-mcp-server", 
+  "service": "json-mcp-server",
   "version": "1.1.0",
   "transport": "http"
 }

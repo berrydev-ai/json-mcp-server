@@ -69,3 +69,6 @@ aws-credentials.json
 
 # Local test configuration
 config.json
+
+# MCP DXT Manifest
+manifest.json
