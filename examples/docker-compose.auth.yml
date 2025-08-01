@@ -1,0 +1,72 @@
+# Authenticated HTTP Transport Server
+# Docker Compose setup with Bearer token authentication
+#
+# Usage:
+#   1. Copy .env.example to .env and set AUTH_TOKEN
+#   2. docker-compose -f examples/docker-compose.auth.yml up -d
+#
+# Access:
+#   Health check: curl http://localhost:8080/health
+#   MCP endpoint: curl -H "Authorization: Bearer your-secret-token" http://localhost:8080/mcp
+#   Alternative: http://localhost:8080/mcp?token=your-secret-token
+
+version: '3.8'
+
+services:
+  json-mcp-server:
+    image: ghcr.io/berrydev-ai/json-mcp-server:latest
+    container_name: json-mcp-server-auth
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount data directory for persistent JSON files
+      - ./data:/data
+      # Mount logs directory for persistent logging
+      - ./logs:/logs
+    environment:
+      # Transport Configuration
+      - TRANSPORT=http
+      - VERBOSE=true
+      - HOST=0.0.0.0
+      - PORT=8080
+      
+      # CORS Configuration (restrict origins for security)
+      - CORS_ORIGIN=https://yourapp.com,http://localhost:3000
+      
+      # Authentication
+      - AUTH_TOKEN=${AUTH_TOKEN:-your-default-secret-token}
+      
+      # File Configuration
+      - FILE_PATH=/data/data.json
+      - LOG_FILE=/logs/server.log
+    
+    # Create directories if they don't exist
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ./logs
+        target: /logs
+        bind:
+          create_host_path: true
+    
+    # Health check (unauthenticated endpoint)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    restart: unless-stopped
+
+# Example environment file content:
+# Create a .env file in the same directory with:
+#
+# AUTH_TOKEN=your-super-secret-token-here
+# 
+# Generate a secure token with:
+# openssl rand -base64 32

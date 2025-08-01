@@ -1,0 +1,129 @@
+# Production HTTP Transport Server
+# Full-featured Docker Compose setup for production deployment
+#
+# Features:
+#   - Bearer token authentication
+#   - S3 synchronization with smart caching
+#   - Restricted CORS origins for security
+#   - Persistent logging and data volumes
+#   - Health checks and restart policies
+#   - Custom port configuration
+#
+# Usage:
+#   1. Copy and customize .env file with production values
+#   2. docker-compose -f examples/docker-compose.production.yml up -d
+#
+# Security Notes:
+#   - Generate secure AUTH_TOKEN: openssl rand -base64 32
+#   - Restrict CORS_ORIGIN to your application domains
+#   - Use IAM roles instead of hardcoded AWS credentials when possible
+#   - Mount SSL certificates for HTTPS (add nginx proxy if needed)
+
+version: '3.8'
+
+services:
+  json-mcp-server:
+    image: ghcr.io/berrydev-ai/json-mcp-server:latest
+    container_name: json-mcp-server-production
+    ports:
+      - "${EXTERNAL_PORT:-8080}:8080"
+    volumes:
+      # Persistent data storage
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: true
+      # Persistent log storage
+      - type: bind
+        source: ./logs
+        target: /logs
+        bind:
+          create_host_path: true
+      # Optional: AWS credentials via mounted file
+      # - ~/.aws:/root/.aws:ro
+    environment:
+      # Transport Configuration
+      - TRANSPORT=http
+      - VERBOSE=${VERBOSE:-false}
+      - HOST=0.0.0.0
+      - PORT=8080
+      
+      # Security Configuration
+      - CORS_ORIGIN=${CORS_ORIGIN:-https://yourapp.com}
+      - AUTH_TOKEN=${AUTH_TOKEN}
+      
+      # File Configuration
+      - FILE_PATH=/data/production-data.json
+      - LOG_FILE=/logs/production.log
+      
+      # S3 Configuration (optional)
+      - S3_URI=${S3_URI:-}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      
+      # Version identifier
+      - MCP_VERSION=${MCP_VERSION:-1.2.0}
+    
+    # Health check with authentication consideration
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    # Production restart policy
+    restart: unless-stopped
+    
+    # Resource limits (adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    
+    # Logging configuration
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: Add nginx reverse proxy for SSL termination
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: json-mcp-nginx
+  #   ports:
+  #     - "443:443"
+  #     - "80:80"
+  #   volumes:
+  #     - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./ssl:/etc/ssl/certs:ro
+  #   depends_on:
+  #     - json-mcp-server
+  #   restart: unless-stopped
+
+# Example environment file content:
+# Create a .env file in the same directory with:
+#
+# # Server Configuration
+# EXTERNAL_PORT=8080
+# VERBOSE=false
+# CORS_ORIGIN=https://yourapp.com,https://dashboard.yourapp.com
+# 
+# # Security
+# AUTH_TOKEN=your-production-secret-token-32-chars-long
+# 
+# # S3 Configuration (optional)
+# S3_URI=s3://your-production-bucket/data.json
+# AWS_REGION=us-east-1
+# AWS_ACCESS_KEY_ID=your-production-aws-key
+# AWS_SECRET_ACCESS_KEY=your-production-aws-secret
+# 
+# # Version
+# MCP_VERSION=1.2.0
