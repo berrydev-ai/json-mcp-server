@@ -6,7 +6,7 @@ RUN apk add --no-cache jq
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S nodejs && \
-    adduser -S mcpserver -u 1001 -G nodejs
+  adduser -S mcpserver -u 1001 -G nodejs
 
 # Set working directory
 WORKDIR /app
@@ -16,8 +16,9 @@ COPY package*.json ./
 COPY pnpm-lock.yaml* ./
 
 # Install pnpm and dependencies
-RUN npm install -g pnpm@10.13.1 && \
-    pnpm install --frozen-lockfile --prod
+RUN npm install -g pnpm@latest && \
+  pnpm install --frozen-lockfile --prod || \
+  (echo "Lockfile incompatible, recreating..." && pnpm install --prod)
 
 # Copy application files
 COPY index.js ./
@@ -41,6 +42,7 @@ ENV HOST=0.0.0.0
 ENV PORT=3000
 ENV VERBOSE=false
 ENV CORS_ORIGIN=*
+ENV JQ_PATH=/usr/bin/jq
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

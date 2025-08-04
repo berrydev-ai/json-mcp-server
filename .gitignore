@@ -5,6 +5,7 @@ package-lock.json
 pnpm-lock.yaml
 
 # Test files and data
+test-data/
 test-data.json
 test-schema.json
 *.test.json

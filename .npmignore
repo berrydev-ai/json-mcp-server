@@ -1,4 +1,5 @@
 # Test files and development scripts
+test-data/
 test.js
 test-data.json
 test-schema.json
