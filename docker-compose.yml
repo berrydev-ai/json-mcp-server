@@ -1,0 +1,57 @@
+# Docker Compose for Local Testing
+#
+# Usage:
+#   # Start all services
+#   docker-compose up -d
+
+services:
+  # Basic HTTP server variant
+  mcp-server:
+    build: .
+    container_name: json-mcp-server
+    ports:
+      - "${PORT:-8081}:3000"
+    volumes:
+      - ./test-data:/data
+      - ./logs:/logs
+    env_file:
+      - .env
+    environment:
+      - TRANSPORT=http
+      - MCP_VERSION=${MCP_VERSION:-1.2.0}
+      - VERBOSE=${VERBOSE:-false}
+      - HOST=${HOST:-0.0.0.0}
+      - PORT=${PORT:-3000}
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
+      - AUTH_TOKEN=${AUTH_TOKEN:-}
+      - FILE_PATH=${FILE_PATH:-}
+      - LOG_FILE=${LOG_FILE:-/logs/server.log}
+      - S3_URI=${S3_URI:-}
+      - AWS_REGION=${AWS_REGION:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 256M
+          cpus: "0.25"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Create shared volumes for data persistence
+volumes:
+  test-data:
+  logs:

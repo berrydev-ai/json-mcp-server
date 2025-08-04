@@ -5,13 +5,14 @@ package-lock.json
 pnpm-lock.yaml
 
 # Test files and data
+test-data/
 test-data.json
 test-schema.json
 *.test.json
 
 # Development and config files
 claude_desktop_config.json
-CLAUDE.md
+CLAUDE.local.md
 
 # ENV files
 .env
@@ -69,3 +70,6 @@ aws-credentials.json
 
 # Local test configuration
 config.json
+
+# MCP DXT Manifest
+manifest.json

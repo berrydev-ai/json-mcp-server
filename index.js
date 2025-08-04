@@ -22,7 +22,7 @@ import {
 import jq from 'node-jq';
 import { createSchema } from 'genson-js';
 import Ajv from 'ajv';
-import { promises as fs } from 'fs';
+import fs, { promises as fsPromises } from 'fs';
 import path from 'path';
 import { program } from 'commander';
 import which from 'which';
@@ -68,30 +68,97 @@ program
 
 /** Extract and define configuration constants from command line options and environment variables */
 const options = program.opts()
-const VERBOSE = options.verbose === "true"
-const DEFAULT_FILE_PATH = options.filePath
-const CUSTOM_JQ_PATH = options.jqPath
-const S3_URI = options.s3Uri
-const AWS_REGION = options.awsRegion
-const TRANSPORT_TYPE = options.transport
-const HTTP_PORT = parseInt(options.port)
-const HTTP_HOST = options.host
-const CORS_ORIGINS = options.corsOrigin === "*" ? "*" : options.corsOrigin.split(",")
+
+// Environment variables take precedence over CLI arguments
+const VERBOSE = (process.env.VERBOSE || options.verbose) === "true"
+const DEFAULT_FILE_PATH = process.env.FILE_PATH || options.filePath
+const JQ_PATH = process.env.JQ_PATH || options.jqPath
+const S3_URI = process.env.S3_URI || options.s3Uri
+const AWS_REGION = process.env.AWS_REGION || options.awsRegion
+const TRANSPORT_TYPE = process.env.TRANSPORT || options.transport
+const HTTP_PORT = parseInt(process.env.PORT || options.port)
+const HTTP_HOST = process.env.HOST || options.host
+const CORS_ORIGINS_RAW = process.env.CORS_ORIGIN || options.corsOrigin
+const CORS_ORIGINS = CORS_ORIGINS_RAW === "*" ? "*" : CORS_ORIGINS_RAW.split(",")
+const LOG_FILE = process.env.LOG_FILE
+const MCP_VERSION = process.env.MCP_VERSION
+const AUTH_TOKEN = process.env.AUTH_TOKEN
 const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID
 const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY
+
 
 /** Global jq configuration object */
 let JQ_CONFIG = {}
 
 /**
- * Logging utility function that outputs to stderr when verbose mode is enabled
+ * Logging utility function that outputs to stderr or log file when verbose mode is enabled
  *
+ * @param {object|string} options - Logging options with sessionId, or first log argument
  * @param {...any} args - Arguments to log
  */
-function log(...args) {
+function log(options, ...args) {
   if (VERBOSE) {
-    console.error("[JSON-MCP-SERVER]", ...args)
+    let sessionId = null
+    let logArgs = args
+
+    // Check if first argument is options object with sessionId
+    if (typeof options === 'object' && options !== null && !Array.isArray(options)) {
+      sessionId = options.sessionId
+      // If there are additional args, use them; otherwise options might contain message
+      if (args.length === 0 && options.message) {
+        logArgs = [options.message]
+      }
+    } else {
+      // First argument is part of the log message
+      logArgs = [options, ...args]
+    }
+
+    const sessionPrefix = sessionId ? `[${sessionId.slice(0, 8)}]` : ''
+    const message = `[JSON-MCP-SERVER]${sessionPrefix} ${logArgs.join(' ')}\n`
+
+    if (LOG_FILE) {
+      try {
+        fs.appendFileSync(LOG_FILE, message)
+      } catch (error) {
+        console.error(`Failed to write to log file ${LOG_FILE}:`, error.message)
+        // Use appropriate console method based on transport type
+        if (TRANSPORT_TYPE === "http") {
+          console.log(message.trim())
+        } else {
+          console.error(message.trim())
+        }
+      }
+    } else {
+      // Use console.log for HTTP transport, console.error for stdio transport
+      if (TRANSPORT_TYPE === "http") {
+        console.log(message.trim())
+      } else {
+        console.error(message.trim())
+      }
+    }
   }
+}
+
+function logConfiguration() {
+  log('Environment Variables:');
+  log(`VERBOSE: ${VERBOSE}`);
+  log(`DEFAULT_FILE_PATH: ${DEFAULT_FILE_PATH}`);
+  log(`JQ_PATH: ${JQ_PATH}`);
+  log(`S3_URI: ${S3_URI}`);
+  log(`AWS_REGION: ${AWS_REGION}`);
+  log(`TRANSPORT_TYPE: ${TRANSPORT_TYPE}`);
+  log(`HTTP_PORT: ${HTTP_PORT}`);
+  log(`HTTP_HOST: ${HTTP_HOST}`);
+  log(`CORS_ORIGINS: ${CORS_ORIGINS}`);
+  log(`LOG_FILE: ${LOG_FILE}`);
+  log(`MCP_VERSION: ${MCP_VERSION}`);
+  log(`AUTH_TOKEN: ${AUTH_TOKEN}`);
+  log(`AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}`);
+  log(`AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}`);
+}
+
+if (VERBOSE && TRANSPORT_TYPE == 'http') {
+  logConfiguration()
 }
 
 /**
@@ -108,9 +175,9 @@ async function initializeJq() {
   try {
     let jqPath
 
-    if (CUSTOM_JQ_PATH) {
+    if (JQ_PATH) {
       // Use custom path if provided
-      jqPath = CUSTOM_JQ_PATH
+      jqPath = JQ_PATH
       log(`Using custom jq path: ${jqPath}`)
     } else {
       // Auto-detect local jq binary
@@ -127,14 +194,22 @@ async function initializeJq() {
             throw whichError // Throw original error
           }
         } else {
-          throw whichError
+          // Try common Alpine Linux path as fallback
+          try {
+            const commonPath = "/usr/bin/jq"
+            await fsPromises.access(commonPath, fs.constants.F_OK)
+            jqPath = commonPath
+            log(`Found jq at common path: ${jqPath}`)
+          } catch (pathError) {
+            throw whichError // Throw original which error
+          }
         }
       }
     }
 
     // Verify the binary exists and is accessible
     try {
-      await fs.access(jqPath)
+      await fsPromises.access(jqPath)
       log(`✅ jq binary found and accessible: ${jqPath}`)
     } catch (accessError) {
       throw new Error(`jq binary not accessible: ${jqPath}`)
@@ -187,7 +262,7 @@ async function initializeJq() {
  */
 async function loadJsonFile(filePath) {
   try {
-    const fileContent = await fs.readFile(filePath, "utf8")
+    const fileContent = await fsPromises.readFile(filePath, "utf8")
     return JSON.parse(fileContent)
   } catch (error) {
     if (error.code === "ENOENT") {
@@ -217,7 +292,7 @@ async function validateFilePath(filePath) {
 
   try {
     await fs.access(filePath)
-    const stats = await fs.stat(filePath)
+    const stats = await fsPromises.stat(filePath)
     if (!stats.isFile()) {
       throw new Error("Path must point to a file")
     }
@@ -327,7 +402,7 @@ async function getS3FileInfo(s3Client, bucket, key) {
  */
 async function getLocalFileInfo(filePath) {
   try {
-    const stats = await fs.stat(filePath)
+    const stats = await fsPromises.stat(filePath)
     return {
       exists: true,
       lastModified: stats.mtime,
@@ -374,7 +449,7 @@ async function downloadFromS3(s3Client, bucket, key, localPath) {
   try {
     // Ensure local directory exists
     const dir = path.dirname(localPath)
-    await fs.mkdir(dir, { recursive: true })
+    await fsPromises.mkdir(dir, { recursive: true })
 
     const command = new GetObjectCommand({ Bucket: bucket, Key: key })
     const response = await s3Client.send(command)
@@ -492,7 +567,7 @@ async function syncFromS3(s3Uri, localPath) {
 const server = new Server(
   {
     name: "json-mcp-server",
-    version: "1.0.0",
+    version: MCP_VERSION || "1.1.0",
   },
   {
     capabilities: {
@@ -764,11 +839,53 @@ async function startHttpServer(mcpServer) {
 
   app.use(express.json())
 
+  // Health check endpoint for Docker
+  app.get('/health', (req, res) => {
+    res.status(200).json({
+      status: 'healthy',
+      service: 'json-mcp-server',
+      version: MCP_VERSION || "1.1.0",
+      transport: 'http'
+    })
+  })
+
   // Map to store transports by session ID
   const transports = {}
 
+  // Authentication middleware for AUTH_TOKEN
+  const authenticate = (req, res, next) => {
+    if (!AUTH_TOKEN) {
+      // No authentication required if AUTH_TOKEN not set
+      return next()
+    }
+
+    const authHeader = req.headers.authorization
+    const tokenParam = req.query.token
+
+    let providedToken = null
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      providedToken = authHeader.slice(7)
+    } else if (tokenParam) {
+      providedToken = tokenParam
+    }
+
+    if (providedToken !== AUTH_TOKEN) {
+      log('Authentication failed - invalid or missing token')
+      return res.status(401).json({
+        jsonrpc: '2.0',
+        error: {
+          code: -32001,
+          message: 'Authentication required. Provide valid Bearer token in Authorization header or token query parameter.',
+        },
+        id: null,
+      })
+    }
+
+    next()
+  }
+
   // Handle POST requests for client-to-server communication
-  app.post('/mcp', async (req, res) => {
+  app.post('/mcp', authenticate, async (req, res) => {
     try {
       // Check for existing session ID
       const sessionId = req.headers['mcp-session-id']
@@ -794,7 +911,7 @@ async function startHttpServer(mcpServer) {
         transport.onclose = () => {
           if (transport.sessionId) {
             delete transports[transport.sessionId]
-            log(`Session ${transport.sessionId} cleaned up`)
+            log({ sessionId: transport.sessionId }, `Session cleaned up`)
           }
         }
 
@@ -843,10 +960,10 @@ async function startHttpServer(mcpServer) {
   }
 
   // Handle GET requests for server-to-client notifications via SSE
-  app.get('/mcp', handleSessionRequest)
+  app.get('/mcp', authenticate, handleSessionRequest)
 
   // Handle DELETE requests for session termination
-  app.delete('/mcp', handleSessionRequest)
+  app.delete('/mcp', authenticate, handleSessionRequest)
 
   // Start the HTTP server
   return new Promise((resolve, reject) => {

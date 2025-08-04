@@ -9,6 +9,8 @@ Node.js server implementing Model Context Protocol (MCP) for JSON operations.
 - Validate JSON schemas to ensure they are properly formed
 - S3 sync support for remote JSON file synchronization
 - Support for both stdio and HTTP transport protocols
+- Docker deployment with authentication support
+- Environment variable configuration for containerized deployments
 
 **Note**: The server requires `jq` binary to be installed on your system and will only allow operations on files with absolute paths.
 
@@ -226,11 +228,124 @@ npm run inspect:local       # Test local development version
 npm run inspect:published   # Test published npm package
 ```
 
+## Docker Deployment
+
+The server is available as a Docker image on GitHub Container Registry for easy deployment and scaling.
+
+### Quick Start
+
+**Basic HTTP server:**
+```bash
+docker run -d --name json-mcp-server \
+  -p 3000:3000 \
+  -e TRANSPORT=http \
+  -e VERBOSE=true \
+  -e HOST=0.0.0.0 \
+  ghcr.io/berrydev-ai/json-mcp-server:latest
+```
+
+**With authentication and file mounting:**
+```bash
+docker run -d --name json-mcp-server \
+  -p 8080:8080 \
+  -v $(pwd)/data:/data \
+  -v $(pwd)/logs:/logs \
+  -e TRANSPORT=http \
+  -e VERBOSE=true \
+  -e LOG_FILE=/logs/server.log \
+  -e FILE_PATH=/data/your-data.json \
+  -e HOST=0.0.0.0 \
+  -e PORT=8080 \
+  -e AUTH_TOKEN=your-secret-token \
+  ghcr.io/berrydev-ai/json-mcp-server:latest
+```
+
+**With S3 sync:**
+```bash
+docker run -d --name json-mcp-server \
+  -p 3000:3000 \
+  -e TRANSPORT=http \
+  -e VERBOSE=true \
+  -e HOST=0.0.0.0 \
+  -e S3_URI=s3://your-bucket/data.json \
+  -e FILE_PATH=/data/synced-data.json \
+  -e AWS_ACCESS_KEY_ID=your-key \
+  -e AWS_SECRET_ACCESS_KEY=your-secret \
+  -e AWS_REGION=us-east-1 \
+  ghcr.io/berrydev-ai/json-mcp-server:latest
+```
+
+### Environment Variables
+
+All CLI arguments can be configured via environment variables (ENV vars take precedence):
+
+| Environment Variable | CLI Argument | Default | Description |
+|---------------------|--------------|---------|-------------|
+| `VERBOSE` | `--verbose` | `false` | Enable verbose logging |
+| `FILE_PATH` | `--file-path` | - | Default file path for JSON operations |
+| `JQ_PATH` | `--jq-path` | auto-detected | Path to jq binary |
+| `S3_URI` | `--s3-uri` | - | S3 URI to sync from |
+| `AWS_REGION` | `--aws-region` | `us-east-1` | AWS region for S3 operations |
+| `TRANSPORT` | `--transport` | `stdio` | Transport type (stdio or http) |
+| `PORT` | `--port` | `3000` | HTTP server port |
+| `HOST` | `--host` | `localhost` | HTTP server host |
+| `CORS_ORIGIN` | `--cors-origin` | `*` | CORS allowed origins |
+| `LOG_FILE` | - | - | Log file path (stdout if not set) |
+| `MCP_VERSION` | - | `1.1.0` | Server version identifier |
+| `AUTH_TOKEN` | - | - | Authentication token for HTTP transport |
+
+### Authentication
+
+When `AUTH_TOKEN` is set, the HTTP server requires authentication:
+
+**MCP Client Configuration:**
+```json
+{
+  "mcpServers": {
+    "json-mcp-server": {
+      "serverUrl": "http://localhost:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer your-secret-token"
+      }
+    }
+  }
+}
+```
+
+**Alternative (query parameter):**
+```
+http://localhost:8080/mcp?token=your-secret-token
+```
+
+### Health Check
+
+The Docker container includes a health check endpoint:
+```bash
+curl http://localhost:3000/health
+```
+
+Returns:
+```json
+{
+  "status": "healthy",
+  "service": "json-mcp-server",
+  "version": "1.1.0",
+  "transport": "http"
+}
+```
+
 ## Build
 
 **NPM Installation:**
 ```bash
 npm install -g @berrydev-ai/json-mcp-server
+```
+
+**Docker Build (local):**
+```bash
+git clone https://github.com/berrydev-ai/json-mcp-server.git
+cd json-mcp-server
+docker build -t json-mcp-server .
 ```
 
 **Local Development:**
