@@ -23,6 +23,7 @@ RUN npm install -g pnpm@latest && \
 # Copy application files
 COPY index.js ./
 COPY test.js ./
+COPY entrypoint.sh ./
 
 # Create data directory for file operations
 RUN mkdir -p /data && chown -R mcpserver:nodejs /data
@@ -37,16 +38,18 @@ USER mcpserver
 EXPOSE 3000
 
 # Set default environment variables
-ENV TRANSPORT=http
-ENV HOST=0.0.0.0
-ENV PORT=3000
-ENV VERBOSE=false
 ENV CORS_ORIGIN=*
+ENV HOST=0.0.0.0
 ENV JQ_PATH=/usr/bin/jq
+ENV LOG_FILE=/logs/server.log
+ENV PORT=3000
+ENV TRANSPORT=http
+ENV VERBOSE=false
+ENV FILE_PATH=/data/data.json
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT}/health || exit 1
 
 # Default command
-CMD ["node", "index.js"]
+CMD ["bash", "entrypoint.sh"]
